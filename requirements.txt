@@ -1,0 +1,57 @@
+# Core dependencies
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# LEANN (RAG)
+leann>=0.3.0
+sentence-transformers>=3.0.0
+torch>=2.0.0
+
+# LLM APIs
+openai>=1.0.0
+
+# Web Search (Brave Search API via httpx)
+httpx>=0.27.0
+
+# UI
+streamlit>=1.30.0
+streamlit-chat>=0.1.1
+
+# Document processing
+llama-index>=0.10.0
+pypdf>=4.0.0
+python-docx>=1.0.0
+python-pptx>=0.6.0
+openpyxl>=3.1.0
+
+# Utilities
+rich>=13.0.0
+tqdm>=4.66.0
+
+# ====================================================================
+# VOICE FEATURES - IMPORTANT: Read this before installing
+# ====================================================================
+# There is a numpy version conflict between ASR (fairseq2) and TTS libraries.
+# We've resolved this by using numpy 1.26.4 which works with both.
+#
+# Install ALL voice dependencies together with:
+#   pip install numpy==1.26.4
+#   pip install soundfile>=0.12.0 librosa>=0.10.1
+#   pip install TTS==0.22.0
+#   pip install fairseq2==0.7.0
+#
+# If you encounter issues:
+# 1. Uninstall all voice packages first
+# 2. Install numpy 1.26.4 FIRST
+# 3. Then install other packages
+#
+# To DISABLE voice features:
+# - Set ASR_ENABLED=false and TTS_ENABLED=false in .env
+# ====================================================================
+
+# Voice dependencies (install manually as per instructions above)
+# numpy==1.26.4  # Critical: Install this version for compatibility
+# soundfile>=0.12.0
+# librosa>=0.10.1
+# TTS==0.22.0
+# fairseq2==0.7.0

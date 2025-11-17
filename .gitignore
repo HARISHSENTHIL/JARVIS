@@ -1,0 +1,45 @@
+# Environment
+.env
+venv/
+env/
+.venv/
+*.pyc
+__pycache__/
+.claude
+
+# Streamlit
+.streamlit/secrets.toml
+
+# User data
+users/
+*.leann/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cache
+.cache/
+*.pkl
+*.pickle
+
+# Models (downloaded)
+models/
+*.pth
+*.bin
+*.safetensors
+
+# Temp files
+tmp/
+temp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db

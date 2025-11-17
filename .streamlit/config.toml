@@ -1,0 +1,11 @@
+[server]
+# Improve performance
+fileWatcherType = "none"
+
+[runner]
+# Prevent torch watcher issues
+fastReruns = true
+
+[client]
+# Display settings
+showErrorDetails = true
