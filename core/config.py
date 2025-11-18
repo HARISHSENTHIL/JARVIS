@@ -85,9 +85,14 @@ class WebSearchConfig(BaseModel):
 class ASRConfig(BaseModel):
     """Automatic Speech Recognition Configuration"""
     enabled: bool = Field(default=False, alias="ASR_ENABLED")
+    mode: Literal["local", "api"] = Field(default="local", alias="ASR_MODE")
     model: str = Field(default="omniASR_CTC_1B", alias="ASR_MODEL")
     device: Literal["cuda", "cpu"] = Field(default="cuda", alias="ASR_DEVICE")
     language: str = Field(default="auto", alias="ASR_LANGUAGE")
+
+    # Canary API settings
+    canary_api_url: Optional[str] = Field(default=None, alias="CANARY_API_URL")
+    canary_jwt_token: Optional[str] = Field(default=None, alias="CANARY_JWT_TOKEN")
 
     class Config:
         populate_by_name = True
@@ -173,7 +178,7 @@ class Config(BaseModel):
                 **{k: v for k, v in os.environ.items() if k.startswith("WEB_SEARCH_") or k == "BRAVE_API_KEY"}
             ),
             asr=ASRConfig(
-                **{k: v for k, v in os.environ.items() if k.startswith("ASR_")}
+                **{k: v for k, v in os.environ.items() if k.startswith(("ASR_", "CANARY_"))}
             ),
             tts=TTSConfig(
                 **{k: v for k, v in os.environ.items() if k.startswith("TTS_")}

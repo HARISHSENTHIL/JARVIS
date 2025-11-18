@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Union
 import numpy as np
+import httpx
 
 from core.config import get_config
 
@@ -23,9 +24,13 @@ class ASREngine:
         self.config = get_config()
         self.model = None
         self.pipeline = None
+        self.mode = self.config.asr.mode
 
         if self.config.asr.enabled:
-            self._initialize_model()
+            if self.mode == "local":
+                self._initialize_model()
+            elif self.mode == "api":
+                self._validate_api_config()
 
     def _initialize_model(self):
         """Initialize Omnilingual ASR model"""
@@ -53,9 +58,62 @@ class ASREngine:
             logger.error(f"Error loading ASR model: {e}")
             raise
 
+    def _validate_api_config(self):
+        """Validate API configuration"""
+        if not self.config.asr.canary_api_url:
+            raise ValueError("CANARY_API_URL not set")
+        if not self.config.asr.canary_jwt_token:
+            raise ValueError("CANARY_JWT_TOKEN not set")
+        logger.info("Canary API configured successfully")
+
     def is_available(self) -> bool:
         """Check if ASR is available"""
-        return self.config.asr.enabled and self.pipeline is not None
+        if not self.config.asr.enabled:
+            return False
+        if self.mode == "local":
+            return self.pipeline is not None
+        elif self.mode == "api":
+            return (
+                self.config.asr.canary_api_url is not None and
+                self.config.asr.canary_jwt_token is not None
+            )
+        return False
+
+    def _transcribe_api(self, audio_path: str, language: str = "en") -> str:
+        """Transcribe using Canary API"""
+        try:
+            logger.info(f"Transcribing via Canary API: {audio_path}")
+
+            with open(audio_path, "rb") as audio_file:
+                files = {"audio": (Path(audio_path).name, audio_file, "audio/wav")}
+                data = {
+                    "source_lang": language,
+                    "target_lang": language
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.config.asr.canary_jwt_token}",
+                    "accept": "application/json"
+                }
+
+                response = httpx.post(
+                    self.config.asr.canary_api_url,
+                    files=files,
+                    data=data,
+                    headers=headers,
+                    timeout=30.0
+                )
+
+                response.raise_for_status()
+                result = response.json()
+
+                # Extract text from API response
+                text = result.get("text", "")
+                logger.info(f"API Transcription: {text[:100]}...")
+                return text
+
+        except Exception as e:
+            logger.error(f"API transcription error: {e}")
+            raise
 
     def transcribe_file(
         self,
@@ -67,7 +125,7 @@ class ASREngine:
 
         Args:
             audio_path: Path to audio file
-            language: Language code (e.g., "eng_Latn", "spa_Latn")
+            language: Language code (e.g., "eng_Latn", "spa_Latn" for local, "en" for API)
                      If None, uses config default or auto-detects
 
         Returns:
@@ -79,12 +137,25 @@ class ASREngine:
         audio_path = str(audio_path)
         language = language or self.config.asr.language
 
-        # Auto-detect language if set to "auto"
+        # Use API mode
+        if self.mode == "api":
+            # Convert language code for API (en, es, de, fr)
+            lang_map = {
+                "eng_Latn": "en",
+                "spa_Latn": "es",
+                "deu_Latn": "de",
+                "fra_Latn": "fr",
+                "auto": "en"
+            }
+            api_lang = lang_map.get(language, "en")
+            return self._transcribe_api(audio_path, api_lang)
+
+        # Use local mode
         if language == "auto":
             language = None  # Let model auto-detect
 
         try:
-            logger.info(f"Transcribing: {audio_path}")
+            logger.info(f"Transcribing (local): {audio_path}")
 
             transcriptions = self.pipeline.transcribe(
                 [audio_path],
