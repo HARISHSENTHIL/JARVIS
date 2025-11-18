@@ -476,18 +476,21 @@ def chat_tab():
                             st.text(source["preview"])
                             st.divider()
 
-    # Voice input section
+    # Combined input section - Voice + Text
     voice_available = (
         AUDIO_RECORDER_AVAILABLE and
         asr_engine and
         asr_engine.is_available()
     )
 
-    if voice_available:
-        st.markdown("### 🎤 Voice Input")
-        col1, col2 = st.columns([1, 4])
+    # Input area with voice button
+    col1, col2 = st.columns([11, 1])
 
-        with col1:
+    with col1:
+        prompt = st.chat_input("Ask me anything... (or use voice 🎤)")
+
+    with col2:
+        if voice_available:
             audio_bytes = audio_recorder(
                 text="",
                 recording_color="#e74c3c",
@@ -497,64 +500,11 @@ def chat_tab():
                 pause_threshold=2.0,
                 sample_rate=16000
             )
+        else:
+            audio_bytes = None
 
-        with col2:
-            if audio_bytes:
-                st.info("🎙️ Recording captured! Processing...")
-            else:
-                st.caption("Click the microphone to start/stop recording")
-
-        # Process voice input
-        if audio_bytes and not st.session_state.processing_voice:
-            st.session_state.processing_voice = True
-
-            with st.spinner("🔄 Processing your voice..."):
-                try:
-                    # Save audio to temp file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-                        temp_audio.write(audio_bytes)
-                        temp_audio_path = temp_audio.name
-
-                    # Transcribe audio
-                    with st.spinner("🗣️ Transcribing..."):
-                        transcribed_text = asr_engine.transcribe_file(temp_audio_path)
-                        logger.info(f"Transcribed: {transcribed_text}")
-
-                    # Clean up temp file
-                    Path(temp_audio_path).unlink()
-
-                    if transcribed_text and transcribed_text.strip():
-                        # Add user message
-                        st.session_state.chat_history.append({
-                            "role": "user",
-                            "content": f"🎤 {transcribed_text}"
-                        })
-
-                        # Display user message
-                        with st.chat_message("user"):
-                            st.markdown(f"🎤 {transcribed_text}")
-
-                        # Process and respond
-                        process_query_and_respond(
-                            transcribed_text,
-                            use_web_fallback,
-                            stream_response
-                        )
-                    else:
-                        st.warning("⚠️ Could not transcribe audio. Please try again.")
-
-                except Exception as e:
-                    st.error(f"❌ Voice processing error: {e}")
-                    logger.error(f"Voice processing error: {e}")
-                finally:
-                    st.session_state.processing_voice = False
-                    st.rerun()
-
-        st.divider()
-
-    # Text input
-    st.markdown("### ⌨️ Text Input")
-    if prompt := st.chat_input("Ask me anything..."):
+    # Process text input
+    if prompt:
         # Add user message
         st.session_state.chat_history.append({
             "role": "user",
@@ -567,6 +517,52 @@ def chat_tab():
 
         # Process and respond
         process_query_and_respond(prompt, use_web_fallback, stream_response)
+
+    # Process voice input
+    if audio_bytes and not st.session_state.processing_voice:
+        st.session_state.processing_voice = True
+
+        with st.spinner("🔄 Processing your voice..."):
+            try:
+                # Save audio to temp file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+                    temp_audio.write(audio_bytes)
+                    temp_audio_path = temp_audio.name
+
+                # Transcribe audio
+                with st.spinner("🗣️ Transcribing..."):
+                    transcribed_text = asr_engine.transcribe_file(temp_audio_path)
+                    logger.info(f"Transcribed: {transcribed_text}")
+
+                # Clean up temp file
+                Path(temp_audio_path).unlink()
+
+                if transcribed_text and transcribed_text.strip():
+                    # Add user message
+                    st.session_state.chat_history.append({
+                        "role": "user",
+                        "content": f"🎤 {transcribed_text}"
+                    })
+
+                    # Display user message
+                    with st.chat_message("user"):
+                        st.markdown(f"🎤 {transcribed_text}")
+
+                    # Process and respond
+                    process_query_and_respond(
+                        transcribed_text,
+                        use_web_fallback,
+                        stream_response
+                    )
+                else:
+                    st.warning("⚠️ Could not transcribe audio. Please try again.")
+
+            except Exception as e:
+                st.error(f"❌ Voice processing error: {e}")
+                logger.error(f"Voice processing error: {e}")
+            finally:
+                st.session_state.processing_voice = False
+                st.rerun()
 
     # Clear chat button
     if st.session_state.chat_history:
