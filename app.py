@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from datetime import datetime
 import time
+import tempfile
+import base64
 
 from core.config import get_config
 from core.user_manager import UserManager
@@ -21,6 +23,14 @@ from utils.helpers import (
     validate_user_id,
     sanitize_user_id
 )
+
+try:
+    from audio_recorder_streamlit import audio_recorder
+    AUDIO_RECORDER_AVAILABLE = True
+except ImportError:
+    AUDIO_RECORDER_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("audio-recorder-streamlit not installed. Voice recording disabled.")
 
 # Setup
 setup_logging()
@@ -66,6 +76,12 @@ if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'config' not in st.session_state:
     st.session_state.config = get_config()
+if 'asr_engine' not in st.session_state:
+    st.session_state.asr_engine = None
+if 'tts_engine' not in st.session_state:
+    st.session_state.tts_engine = None
+if 'processing_voice' not in st.session_state:
+    st.session_state.processing_voice = False
 
 
 def init_user(user_id: str):
@@ -74,6 +90,25 @@ def init_user(user_id: str):
         st.session_state.user_id = user_id
         st.session_state.rag_engine = RAGEngine(user_id)
         st.session_state.chat_history = []
+
+        # Initialize voice engines if enabled
+        config = get_config()
+        if config.asr.enabled:
+            try:
+                st.session_state.asr_engine = ASREngine()
+                logger.info("ASR engine initialized")
+            except Exception as e:
+                logger.warning(f"ASR initialization failed: {e}")
+                st.session_state.asr_engine = None
+
+        if config.tts.enabled:
+            try:
+                st.session_state.tts_engine = TTSEngine()
+                logger.info("TTS engine initialized")
+            except Exception as e:
+                logger.warning(f"TTS initialization failed: {e}")
+                st.session_state.tts_engine = None
+
         st.success(f"✅ Initialized session for user: {user_id}")
     except Exception as e:
         st.error(f"❌ Error initializing user: {e}")
@@ -264,8 +299,127 @@ def document_management_tab():
             st.info("Upload documents first to build an index")
 
 
+def process_query_and_respond(prompt: str, use_web_fallback: bool, stream_response: bool):
+    """Process a query (text or voice) and generate response with TTS"""
+    rag_engine = st.session_state.rag_engine
+    tts_engine = st.session_state.tts_engine
+
+    # Generate response
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        sources_placeholder = st.empty()
+        audio_placeholder = st.empty()
+
+        try:
+            if stream_response:
+                # Streaming response
+                full_response = ""
+                sources = []
+                used_web = False
+
+                for chunk in rag_engine.ask(
+                    prompt,
+                    use_web_fallback=use_web_fallback,
+                    stream=True
+                ):
+                    if chunk["type"] == "metadata":
+                        sources = chunk["sources"]
+                        used_web = chunk["used_web_search"]
+                    elif chunk["type"] == "chunk":
+                        full_response += chunk["content"]
+                        message_placeholder.markdown(full_response + "▌")
+
+                message_placeholder.markdown(full_response)
+
+                # Show sources
+                if sources:
+                    with sources_placeholder.expander(f"📚 Sources ({len(sources)})"):
+                        for i, source in enumerate(sources, 1):
+                            if source["type"] == "document":
+                                st.markdown(f"**{i}. 📄 {source['title']}**")
+                                st.caption(f"Relevance: {source['score']:.2f}")
+                            else:
+                                st.markdown(f"**{i}. 🌐 {source['title']}**")
+                                st.caption(source['url'])
+                            st.text(source["preview"])
+                            st.divider()
+
+                # Generate TTS audio
+                if tts_engine and tts_engine.is_available():
+                    with st.spinner("🔊 Generating audio..."):
+                        try:
+                            audio_array = tts_engine.synthesize(full_response)
+                            if audio_array is not None:
+                                # Convert audio array to bytes for playback
+                                import soundfile as sf
+                                import io
+                                audio_bytes_io = io.BytesIO()
+                                sf.write(audio_bytes_io, audio_array, 24000, format='WAV')
+                                audio_bytes = audio_bytes_io.getvalue()
+                                audio_placeholder.audio(audio_bytes, format="audio/wav", autoplay=True)
+                        except Exception as e:
+                            logger.error(f"TTS error: {e}")
+
+                # Add to history
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": full_response,
+                    "sources": sources
+                })
+
+            else:
+                # Non-streaming response
+                with st.spinner("Thinking..."):
+                    response = rag_engine.ask(
+                        prompt,
+                        use_web_fallback=use_web_fallback,
+                        stream=False
+                    )
+
+                message_placeholder.markdown(response["answer"])
+
+                # Show sources
+                if response["sources"]:
+                    with sources_placeholder.expander(f"📚 Sources ({len(response['sources'])})"):
+                        for i, source in enumerate(response["sources"], 1):
+                            if source["type"] == "document":
+                                st.markdown(f"**{i}. 📄 {source['title']}**")
+                                st.caption(f"Relevance: {source['score']:.2f}")
+                            else:
+                                st.markdown(f"**{i}. 🌐 {source['title']}**")
+                                st.caption(source['url'])
+                            st.text(source["preview"])
+                            st.divider()
+
+                # Generate TTS audio
+                if tts_engine and tts_engine.is_available():
+                    with st.spinner("🔊 Generating audio..."):
+                        try:
+                            audio_array = tts_engine.synthesize(response["answer"])
+                            if audio_array is not None:
+                                import soundfile as sf
+                                import io
+                                audio_bytes_io = io.BytesIO()
+                                sf.write(audio_bytes_io, audio_array, 24000, format='WAV')
+                                audio_bytes = audio_bytes_io.getvalue()
+                                audio_placeholder.audio(audio_bytes, format="audio/wav", autoplay=True)
+                        except Exception as e:
+                            logger.error(f"TTS error: {e}")
+
+                # Add to history
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": response["answer"],
+                    "sources": response["sources"]
+                })
+
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
+            logger.error(f"Chat error: {e}")
+
+
 def chat_tab():
-    """Chat interface"""
+    """Chat interface with voice support"""
     st.header("💬 Chat with Jarvis")
 
     if not st.session_state.user_id:
@@ -273,6 +427,8 @@ def chat_tab():
         return
 
     rag_engine = st.session_state.rag_engine
+    asr_engine = st.session_state.asr_engine
+    tts_engine = st.session_state.tts_engine
     stats = rag_engine.get_stats()
 
     if not stats["index_built"]:
@@ -320,7 +476,84 @@ def chat_tab():
                             st.text(source["preview"])
                             st.divider()
 
-    # Chat input
+    # Voice input section
+    voice_available = (
+        AUDIO_RECORDER_AVAILABLE and
+        asr_engine and
+        asr_engine.is_available()
+    )
+
+    if voice_available:
+        st.markdown("### 🎤 Voice Input")
+        col1, col2 = st.columns([1, 4])
+
+        with col1:
+            audio_bytes = audio_recorder(
+                text="",
+                recording_color="#e74c3c",
+                neutral_color="#3498db",
+                icon_name="microphone",
+                icon_size="2x",
+                pause_threshold=2.0,
+                sample_rate=16000
+            )
+
+        with col2:
+            if audio_bytes:
+                st.info("🎙️ Recording captured! Processing...")
+            else:
+                st.caption("Click the microphone to start/stop recording")
+
+        # Process voice input
+        if audio_bytes and not st.session_state.processing_voice:
+            st.session_state.processing_voice = True
+
+            with st.spinner("🔄 Processing your voice..."):
+                try:
+                    # Save audio to temp file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+                        temp_audio.write(audio_bytes)
+                        temp_audio_path = temp_audio.name
+
+                    # Transcribe audio
+                    with st.spinner("🗣️ Transcribing..."):
+                        transcribed_text = asr_engine.transcribe_file(temp_audio_path)
+                        logger.info(f"Transcribed: {transcribed_text}")
+
+                    # Clean up temp file
+                    Path(temp_audio_path).unlink()
+
+                    if transcribed_text and transcribed_text.strip():
+                        # Add user message
+                        st.session_state.chat_history.append({
+                            "role": "user",
+                            "content": f"🎤 {transcribed_text}"
+                        })
+
+                        # Display user message
+                        with st.chat_message("user"):
+                            st.markdown(f"🎤 {transcribed_text}")
+
+                        # Process and respond
+                        process_query_and_respond(
+                            transcribed_text,
+                            use_web_fallback,
+                            stream_response
+                        )
+                    else:
+                        st.warning("⚠️ Could not transcribe audio. Please try again.")
+
+                except Exception as e:
+                    st.error(f"❌ Voice processing error: {e}")
+                    logger.error(f"Voice processing error: {e}")
+                finally:
+                    st.session_state.processing_voice = False
+                    st.rerun()
+
+        st.divider()
+
+    # Text input
+    st.markdown("### ⌨️ Text Input")
     if prompt := st.chat_input("Ask me anything..."):
         # Add user message
         st.session_state.chat_history.append({
@@ -332,86 +565,8 @@ def chat_tab():
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Generate response
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            sources_placeholder = st.empty()
-
-            try:
-                if stream_response:
-                    # Streaming response
-                    full_response = ""
-                    sources = []
-                    used_web = False
-
-                    for chunk in rag_engine.ask(
-                        prompt,
-                        use_web_fallback=use_web_fallback,
-                        stream=True
-                    ):
-                        if chunk["type"] == "metadata":
-                            sources = chunk["sources"]
-                            used_web = chunk["used_web_search"]
-                        elif chunk["type"] == "chunk":
-                            full_response += chunk["content"]
-                            message_placeholder.markdown(full_response + "▌")
-
-                    message_placeholder.markdown(full_response)
-
-                    # Show sources
-                    if sources:
-                        with sources_placeholder.expander(f"📚 Sources ({len(sources)})"):
-                            for i, source in enumerate(sources, 1):
-                                if source["type"] == "document":
-                                    st.markdown(f"**{i}. 📄 {source['title']}**")
-                                    st.caption(f"Relevance: {source['score']:.2f}")
-                                else:
-                                    st.markdown(f"**{i}. 🌐 {source['title']}**")
-                                    st.caption(source['url'])
-                                st.text(source["preview"])
-                                st.divider()
-
-                    # Add to history
-                    st.session_state.chat_history.append({
-                        "role": "assistant",
-                        "content": full_response,
-                        "sources": sources
-                    })
-
-                else:
-                    # Non-streaming response
-                    with st.spinner("Thinking..."):
-                        response = rag_engine.ask(
-                            prompt,
-                            use_web_fallback=use_web_fallback,
-                            stream=False
-                        )
-
-                    message_placeholder.markdown(response["answer"])
-
-                    # Show sources
-                    if response["sources"]:
-                        with sources_placeholder.expander(f"📚 Sources ({len(response['sources'])})"):
-                            for i, source in enumerate(response["sources"], 1):
-                                if source["type"] == "document":
-                                    st.markdown(f"**{i}. 📄 {source['title']}**")
-                                    st.caption(f"Relevance: {source['score']:.2f}")
-                                else:
-                                    st.markdown(f"**{i}. 🌐 {source['title']}**")
-                                    st.caption(source['url'])
-                                st.text(source["preview"])
-                                st.divider()
-
-                    # Add to history
-                    st.session_state.chat_history.append({
-                        "role": "assistant",
-                        "content": response["answer"],
-                        "sources": response["sources"]
-                    })
-
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
-                logger.error(f"Chat error: {e}")
+        # Process and respond
+        process_query_and_respond(prompt, use_web_fallback, stream_response)
 
     # Clear chat button
     if st.session_state.chat_history:
@@ -435,14 +590,20 @@ def main():
         - 📄 Upload and index your documents
         - 💬 Chat with your documents using natural language
         - 🌐 Automatic web search fallback
-        - 🗣️ Multilingual voice support (coming soon)
+        - 🎤 Voice input with speech-to-text (1600+ languages)
+        - 🔊 Voice output with text-to-speech (auto-play)
         - 🔒 100% privacy - everything runs locally
 
         **Get Started:**
         1. Select an existing user or create a new one in the sidebar →
         2. Upload your documents
         3. Build an index
-        4. Start chatting!
+        4. Start chatting with text or voice!
+
+        **Voice Features:**
+        - Click the microphone button to record your question
+        - Click again to stop and process
+        - The response will automatically play as audio
 
         """)
 
