@@ -16,13 +16,13 @@ openai>=1.0.0
 
 # ML/RAG
 torch>=2.0.0
-sentence-transformers>=3.0.0
+sentence-transformers==3.0.0
 leann>=0.3.0
 
 # UI
 streamlit>=1.30.0
 streamlit-chat>=0.1.1
-llama-index>=0.10.0
+llama-index==0.10.0
 
 # Audio
 soundfile>=0.12.0
@@ -32,5 +32,5 @@ audio-recorder-streamlit>=0.0.8
 # TTS
 TTS==0.22.0
 
-# ASR (includes fairseq2 as dependency)
+# ASR
 omnilingual-asr
